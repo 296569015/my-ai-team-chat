@@ -83,20 +83,28 @@ DeepSeek回复
 ```
 ai-team-chat/
 ├── agents/                # AI 代理
-│   ├── qwen-agent.js     # 千问
-│   ├── kimi-agent.js     # Kimi
-│   └── deepseek-agent.js # DeepSeek
-├── public/               # 前端文件
-│   ├── index.html        # 页面结构
-│   ├── style.css         # 样式
-│   └── app.js            # 前端逻辑
-├── utils/                # 工具函数
-│   ├── api-client.js     # API 调用
-│   └── cli-spawn.js      # CLI 工具（保留）
-├── server.js             # Web 服务器
-├── team-manager.js       # 团队管理
-├── index.js              # 命令行版本入口
-├── .env                  # 环境变量
+│   ├── qwen-agent.js      # 千问
+│   ├── kimi-agent.js      # Kimi
+│   ├── deepseek-agent.js  # DeepSeek
+│   ├── baichuan-agent.js  # 百川
+│   └── agent-with-tools.js # 支持工具的代理基类
+├── public/                # 前端文件
+│   ├── index.html         # 页面结构
+│   ├── style.css          # 样式
+│   └── app.js             # 前端逻辑
+├── scripts/               # 脚本工具
+│   ├── add-agent.js       # 添加新代理脚本
+│   └── check-project.js   # 项目检查脚本
+├── tools/                 # 工具注册
+│   └── tool-registry.js   # 工具注册表
+├── utils/                 # 工具函数
+│   ├── api-client.js      # API 调用
+│   ├── cli-spawn.js       # CLI 工具
+│   └── mention-parser.js  # @提及解析器
+├── server.js              # Web 服务器
+├── team-manager.js        # 团队管理
+├── index.js               # 命令行版本入口
+├── .env                   # 环境变量
 └── package.json
 ```
 

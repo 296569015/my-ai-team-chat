@@ -12,6 +12,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// 调试：检查环境变量
+console.log('Environment check:');
+console.log('QWEN_API_KEY:', process.env.QWEN_API_KEY ? '已设置 (' + process.env.QWEN_API_KEY.slice(0, 10) + '...)' : '未设置');
+console.log('KIMI_API_KEY:', process.env.KIMI_API_KEY ? '已设置 (' + process.env.KIMI_API_KEY.slice(0, 10) + '...)' : '未设置');
+console.log('DEEPSEEK_API_KEY:', process.env.DEEPSEEK_API_KEY ? '已设置 (' + process.env.DEEPSEEK_API_KEY.slice(0, 10) + '...)' : '未设置');
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -204,6 +210,28 @@ async function processMentionQueue(sessionId, io) {
         session.agentSessions[agentId] = event.sessionId;
       }
       
+      // 流式响应开始
+      if (event.type === 'message_start') {
+        io.to(sessionId).emit('message_start', {
+          sessionId,
+          agentId,
+          timestamp: Date.now()
+        });
+      }
+      
+      // 流式内容增量
+      if (event.type === 'message_delta') {
+        messageContent = event.content;
+        io.to(sessionId).emit('message_delta', {
+          sessionId,
+          agentId,
+          content: event.content,
+          delta: event.delta,
+          timestamp: Date.now()
+        });
+      }
+      
+      // 完整消息（流式结束时）
       if (event.type === 'message') {
         messageContent = event.content;
         const mentionResult = parseMentions(messageContent);

@@ -1,11 +1,11 @@
-import { callAIApi } from '../utils/api-client.js';
+import { streamAIApi } from '../utils/api-client.js';
 import { AgentWithTools } from './agent-with-tools.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 /**
- * Kimi Agent - 支持工具调用
+ * Kimi Agent - 支持流式响应
  * 使用月之暗面 Moonshot API
  */
 export class KimiAgent extends AgentWithTools {
@@ -17,7 +17,7 @@ export class KimiAgent extends AgentWithTools {
   }
 
   /**
-   * 调用 Kimi AI
+   * 调用 Kimi AI - 流式版本
    * @param {string} prompt - 完整提示（包含对话历史）
    * @param {Object} options - 选项
    */
@@ -32,7 +32,6 @@ export class KimiAgent extends AgentWithTools {
       return;
     }
 
-    // 获取或创建会话
     let sessionId = options.sessionId;
     if (!sessionId) {
       sessionId = `kimi-${Date.now()}`;
@@ -46,57 +45,70 @@ export class KimiAgent extends AgentWithTools {
     }
 
     try {
-      // 构建消息
-      const userMessage = { role: 'user', content: prompt };
-      
-      const chatCallback = async (messages) => {
-        const response = await callAIApi({
-          apiUrl: 'https://api.moonshot.cn/v1/chat/completions',
-          apiKey: this.apiKey,
-          body: {
-            model: this.model,
-            messages: messages
-          }
-        });
-        return {
-          content: response.choices?.[0]?.message?.content
-        };
+      const messages = [
+        { role: 'system', content: this.getSystemPrompt() },
+        { role: 'user', content: prompt }
+      ];
+
+      yield {
+        type: 'message_start',
+        agentId: this.agentId,
+        timestamp: Date.now()
       };
 
-      // 执行并获取结果
-      const result = await this.executeWithTools([userMessage], chatCallback);
-      
-      // 先发送工具事件
-      for (const event of result.events) {
-        yield event;
+      let fullContent = '';
+      let buffer = '';
+
+      for await (const chunk of streamAIApi({
+        apiUrl: 'https://api.moonshot.cn/v1/chat/completions',
+        apiKey: this.apiKey,
+        body: {
+          model: this.model,
+          messages: messages
+        }
+      })) {
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullContent += delta;
+          buffer += delta;
+          
+          if (buffer.length >= 5 || /[。！？\n]/.test(delta)) {
+            yield {
+              type: 'message_delta',
+              agentId: this.agentId,
+              content: fullContent,
+              delta: buffer,
+              timestamp: Date.now()
+            };
+            buffer = '';
+          }
+        }
       }
-      
-      // 发送最终消息
-      if (result.error) {
+
+      if (buffer.length > 0) {
         yield {
-          type: 'error',
+          type: 'message_delta',
           agentId: this.agentId,
-          error: result.error,
+          content: fullContent,
+          delta: buffer,
           timestamp: Date.now()
         };
       }
-      
-      if (result.content) {
+
+      if (fullContent) {
         yield {
           type: 'message',
           agentId: this.agentId,
-          content: result.content,
+          content: fullContent,
           timestamp: Date.now()
         };
       }
 
-      // 保存到历史
       const session = this.sessions.get(sessionId);
       session.push({ role: 'user', content: prompt });
-      if (result.content) {
-        session.push({ role: 'assistant', content: result.content });
+      if (fullContent) {
+        session.push({ role: 'assistant', content: fullContent });
       }
-      // 只保留最近 20 条
       if (session.length > 20) {
         session.splice(0, session.length - 20);
       }
@@ -116,10 +128,14 @@ export class KimiAgent extends AgentWithTools {
       };
 
     } catch (error) {
+      const isAuthError = error.message.includes('401') || error.message.includes('Authentication');
+      const errorMsg = isAuthError 
+        ? `【Kimi API 密钥错误】请检查 .env 文件中的 KIMI_API_KEY 是否正确。错误: ${error.message}`
+        : error.message;
       yield {
         type: 'error',
         agentId: this.agentId,
-        error: error.message,
+        error: errorMsg,
         timestamp: Date.now()
       };
     }

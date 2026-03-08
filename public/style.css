@@ -465,6 +465,25 @@ body {
   font-weight: 600;
 }
 
+/* 流式响应指示器 */
+.streaming-indicator {
+  width: 8px;
+  height: 8px;
+  background: #10b981;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+  margin-left: 4px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.message.streaming .message-content {
+  border: 1px solid #10b981;
+}
+
 .message.user .message-author {
   color: rgba(255, 255, 255, 0.9);
 }

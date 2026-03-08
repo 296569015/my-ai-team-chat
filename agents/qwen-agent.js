@@ -1,11 +1,11 @@
-import { callAIApi } from '../utils/api-client.js';
+import { streamAIApi } from '../utils/api-client.js';
 import { AgentWithTools } from './agent-with-tools.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 /**
- * 千问 (Qwen) Agent - 支持工具调用
+ * 千问 (Qwen) Agent - 支持流式响应
  * 使用阿里云 DashScope API
  */
 export class QwenAgent extends AgentWithTools {
@@ -17,7 +17,7 @@ export class QwenAgent extends AgentWithTools {
   }
 
   /**
-   * 调用千问 AI
+   * 调用千问 AI - 流式版本
    * @param {string} prompt - 完整提示（包含对话历史）
    * @param {Object} options - 选项
    */
@@ -46,46 +46,66 @@ export class QwenAgent extends AgentWithTools {
     }
 
     try {
-      // 构建消息
-      const userMessage = { role: 'user', content: prompt };
-      
-      const chatCallback = async (messages) => {
-        const response = await callAIApi({
-          apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-          apiKey: this.apiKey,
-          body: {
-            model: this.model,
-            messages: messages
-          }
-        });
-        return {
-          content: response.choices?.[0]?.message?.content
-        };
+      const messages = [
+        { role: 'system', content: this.getSystemPrompt() },
+        { role: 'user', content: prompt }
+      ];
+
+      // 开始流式响应
+      yield {
+        type: 'message_start',
+        agentId: this.agentId,
+        timestamp: Date.now()
       };
 
-      // 执行并获取结果
-      const result = await this.executeWithTools([userMessage], chatCallback);
-      
-      // 先发送工具事件
-      for (const event of result.events) {
-        yield event;
+      let fullContent = '';
+      let buffer = '';
+
+      // 调用流式 API
+      for await (const chunk of streamAIApi({
+        apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+        apiKey: this.apiKey,
+        body: {
+          model: this.model,
+          messages: messages
+        }
+      })) {
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullContent += delta;
+          buffer += delta;
+          
+          // 每积累一定内容或遇到标点就发送
+          if (buffer.length >= 5 || /[。！？\n]/.test(delta)) {
+            yield {
+              type: 'message_delta',
+              agentId: this.agentId,
+              content: fullContent,
+              delta: buffer,
+              timestamp: Date.now()
+            };
+            buffer = '';
+          }
+        }
       }
-      
-      // 发送最终消息
-      if (result.error) {
+
+      // 发送剩余内容
+      if (buffer.length > 0) {
         yield {
-          type: 'error',
+          type: 'message_delta',
           agentId: this.agentId,
-          error: result.error,
+          content: fullContent,
+          delta: buffer,
           timestamp: Date.now()
         };
       }
-      
-      if (result.content) {
+
+      // 发送完整消息结束
+      if (fullContent) {
         yield {
           type: 'message',
           agentId: this.agentId,
-          content: result.content,
+          content: fullContent,
           timestamp: Date.now()
         };
       }
@@ -93,10 +113,9 @@ export class QwenAgent extends AgentWithTools {
       // 保存到历史
       const session = this.sessions.get(sessionId);
       session.push({ role: 'user', content: prompt });
-      if (result.content) {
-        session.push({ role: 'assistant', content: result.content });
+      if (fullContent) {
+        session.push({ role: 'assistant', content: fullContent });
       }
-      // 只保留最近 20 条
       if (session.length > 20) {
         session.splice(0, session.length - 20);
       }
@@ -116,10 +135,14 @@ export class QwenAgent extends AgentWithTools {
       };
 
     } catch (error) {
+      const isAuthError = error.message.includes('401') || error.message.includes('Authentication');
+      const errorMsg = isAuthError 
+        ? `【千问 API 密钥错误】请检查 .env 文件中的 QWEN_API_KEY 是否正确。错误: ${error.message}`
+        : error.message;
       yield {
         type: 'error',
         agentId: this.agentId,
-        error: error.message,
+        error: errorMsg,
         timestamp: Date.now()
       };
     }

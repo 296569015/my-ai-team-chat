@@ -116,9 +116,25 @@ function initSocket() {
     loadSession(data.session);
   });
   
+  // 流式响应开始
+  state.socket.on('message_start', (data) => {
+    if (data.sessionId === state.currentSessionId) {
+      hideTyping();
+      appendStreamingMessage(data.agentId);
+    }
+  });
+  
+  // 流式内容增量
+  state.socket.on('message_delta', (data) => {
+    if (data.sessionId === state.currentSessionId) {
+      updateStreamingMessage(data.agentId, data.content);
+    }
+  });
+  
+  // 完整消息（流式结束时）
   state.socket.on('message', (data) => {
     if (data.sessionId === state.currentSessionId) {
-      appendMessage(data);
+      finalizeStreamingMessage(data);
     }
   });
   
@@ -278,6 +294,77 @@ function loadSession(session) {
 }
 
 // ===== 消息处理 =====
+
+// 存储正在流式显示的消息元素
+const streamingMessages = {};
+
+function appendStreamingMessage(agentId) {
+  const config = agentConfig[agentId];
+  const msg = document.createElement('div');
+  msg.className = 'message streaming';
+  msg.id = `streaming-${agentId}`;
+  
+  const avatarHtml = `<div class="message-avatar" style="background: ${config.color}">${config.icon}</div>`;
+  const authorName = config.name;
+  const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  
+  msg.innerHTML = `
+    ${avatarHtml}
+    <div class="message-content">
+      <div class="message-header">
+        <span class="message-author">${authorName}</span>
+        <span class="message-time">${timeStr}</span>
+        <span class="streaming-indicator">●</span>
+      </div>
+      <div class="message-text"></div>
+    </div>
+  `;
+  
+  elements.messagesContainer.appendChild(msg);
+  streamingMessages[agentId] = msg;
+  scrollToBottom();
+}
+
+function updateStreamingMessage(agentId, content) {
+  const msg = streamingMessages[agentId];
+  if (!msg) return;
+  
+  const textEl = msg.querySelector('.message-text');
+  
+  // 处理@高亮
+  let contentHtml = escapeHtml(content);
+  contentHtml = contentHtml.replace(/@([\u4e00-\u9fa5a-zA-Z]+)/g, (match, name) => {
+    const agent = Object.values(agentConfig).find(a => a.name === name);
+    if (agent) {
+      return `<span style="color: ${agent.color}; font-weight: 600;">${match}</span>`;
+    }
+    return match;
+  });
+  
+  textEl.innerHTML = contentHtml;
+  scrollToBottom();
+}
+
+function finalizeStreamingMessage(data) {
+  const agentId = data.agentId;
+  const msg = streamingMessages[agentId];
+  
+  if (msg) {
+    // 移除流式标记和指示器
+    msg.classList.remove('streaming');
+    const indicator = msg.querySelector('.streaming-indicator');
+    if (indicator) indicator.remove();
+    
+    // 更新最终内容
+    updateStreamingMessage(agentId, data.content);
+    
+    // 清理引用
+    delete streamingMessages[agentId];
+  } else {
+    // 如果没有找到流式消息，创建普通消息
+    appendMessage(data);
+  }
+}
 
 function appendMessage(data) {
   const msg = document.createElement('div');
