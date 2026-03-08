@@ -1063,11 +1063,11 @@ body {
     z-index: 100;
     transition: left 0.3s;
   }
-  
+
   .sidebar-left.show {
     left: 0;
   }
-  
+
   .btn-toggle-sidebar {
     display: block;
   }
@@ -1090,4 +1090,62 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+/* ===== 角色标签样式 ===== */
+.member-chip {
+  cursor: help;
+}
+
+.member-item-role {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.agent-option-role {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.mention-popup-item {
+  padding: 10px 14px;
+}
+
+.mention-popup-item > div:last-child {
+  flex: 1;
+}
+
+.session-meta-role {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ===== 项目信息样式 ===== */
+.project-info {
+  font-size: 13px;
+}
+
+.session-project-info {
+  background: var(--bg-main);
+  padding: 12px;
+  border-radius: var(--radius);
+}
+
+.recent-projects {
+  margin-top: 8px;
+}
+
+.recent-project-item:hover {
+  background: #e0e7ff !important;
+}
+
+.recent-project-item:hover .fa-folder {
+  color: #6366f1 !important;
+}
+
+.recent-project-item:hover .fa-times {
+  color: #ef4444 !important;
 }

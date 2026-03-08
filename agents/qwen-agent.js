@@ -7,10 +7,11 @@ dotenv.config();
 /**
  * 千问 (Qwen) Agent - 支持流式响应和取消
  * 使用阿里云 DashScope API
+ * 角色：首席设计师 & 产品经理
  */
 export class QwenAgent extends AgentWithTools {
   constructor(model = process.env.QWEN_MODEL || 'qwen-max') {
-    super('qwen', '千问', '小千', '阿里云', '代码生成、技术实现和工程化能力');
+    super('qwen', '千问', '小千', '阿里云', '创意和视觉设计', '首席设计师 & 产品经理', '负责产品视觉设计、用户体验规划和产品方案');
     this.model = model;
     this.apiKey = process.env.QWEN_API_KEY;
     this.sessions = new Map();
@@ -190,6 +191,121 @@ export class QwenAgent extends AgentWithTools {
         type: 'error',
         agentId: this.agentId,
         error: errorMsg,
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * 在工具执行后继续对话（流式版本）
+   * @param {string} originalContent - AI 的原始回复（包含工具调用）
+   * @param {string} toolResult - 工具执行结果
+   * @param {Object} options - 选项，包含 sessionId 和 signal
+   */
+  async *invokeWithToolResult(originalContent, toolResult, options = {}) {
+    const { signal } = options;
+    
+    if (this.checkCancelled(signal)) {
+      yield { type: 'cancelled', agentId: this.agentId, timestamp: Date.now() };
+      return;
+    }
+
+    try {
+      // 构建包含历史对话的消息
+      const sessionId = options.sessionId || `qwen-${Date.now()}`;
+      const session = this.sessions.get(sessionId) || [];
+      
+      const messages = [
+        { role: 'system', content: this.getSystemPrompt() },
+        ...session.slice(-10), // 取最近10条历史
+        { role: 'assistant', content: originalContent },
+        { role: 'user', content: toolResult }
+      ];
+
+      yield {
+        type: 'message_start',
+        agentId: this.agentId,
+        timestamp: Date.now()
+      };
+
+      let fullContent = '';
+      let buffer = '';
+
+      for await (const chunk of streamAIApi({
+        apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+        apiKey: this.apiKey,
+        body: {
+          model: this.model,
+          messages: messages
+        },
+        signal
+      })) {
+        if (this.checkCancelled(signal)) {
+          yield { type: 'cancelled', agentId: this.agentId, timestamp: Date.now() };
+          return;
+        }
+        
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullContent += delta;
+          buffer += delta;
+          
+          if (buffer.length >= 5 || /[。！？\n]/.test(delta)) {
+            yield {
+              type: 'message_delta',
+              agentId: this.agentId,
+              content: fullContent,
+              delta: buffer,
+              timestamp: Date.now()
+            };
+            buffer = '';
+          }
+        }
+      }
+
+      if (buffer.length > 0) {
+        yield {
+          type: 'message_delta',
+          agentId: this.agentId,
+          content: fullContent,
+          delta: buffer,
+          timestamp: Date.now()
+        };
+      }
+
+      if (fullContent) {
+        yield {
+          type: 'message',
+          agentId: this.agentId,
+          content: fullContent,
+          timestamp: Date.now()
+        };
+      }
+
+      yield {
+        type: 'result',
+        agentId: this.agentId,
+        status: 'success',
+        sessionId: sessionId,
+        timestamp: Date.now()
+      };
+
+      yield {
+        type: 'done',
+        agentId: this.agentId,
+        timestamp: Date.now()
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError' || this.checkCancelled(signal)) {
+        yield { type: 'cancelled', agentId: this.agentId, timestamp: Date.now() };
+        return;
+      }
+      
+      yield {
+        type: 'error',
+        agentId: this.agentId,
+        error: error.message,
         timestamp: Date.now()
       };
     }

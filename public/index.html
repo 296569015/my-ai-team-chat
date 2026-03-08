@@ -133,6 +133,13 @@
       </div>
 
       <div class="sidebar-section">
+        <h3 class="section-title">项目信息</h3>
+        <div class="project-info" id="projectInfo">
+          <div class="empty-text">未设置项目</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
         <h3 class="section-title">快捷操作</h3>
         <div class="quick-actions">
           <button class="action-btn" id="btnClearChat">
@@ -159,10 +166,26 @@
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label>选择AI成员</label>
+          <label>选择 AI 成员</label>
           <div class="agent-select-list" id="agentSelectList">
-            <!-- AI选项动态插入 -->
+            <!-- AI 选项动态插入 -->
           </div>
+        </div>
+        <div class="form-group">
+          <label>项目路径（可选）</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <input type="text" id="projectPathInput" placeholder="例如：D:\code\my-project" style="flex: 1;">
+            <button class="btn btn-secondary" id="btnBrowsePath" title="浏览文件夹" style="width: auto; padding: 0 16px;">
+              <i class="fas fa-folder-open"></i>
+            </button>
+          </div>
+          <div id="recentProjectsList" class="recent-projects"></div>
+          <span class="form-hint">AI 将在此路径下进行代码编写和文件操作，留空表示无特定项目</span>
+        </div>
+        <div class="form-group">
+          <label>Git 仓库地址（可选）</label>
+          <input type="text" id="gitRepoInput" placeholder="例如：https://github.com/user/repo.git">
+          <span class="form-hint">方便 AI 了解项目来源和结构</span>
         </div>
         <div class="form-group">
           <label>会话名称（可选）</label>

@@ -32,6 +32,56 @@ const AGENT_ALIASES = {
   '大家': 'all'
 };
 
+/**
+ * 将全角字符转换为半角字符
+ * 解决中文输入法下输入的全角英文字母/数字无法匹配的问题
+ * @param {string} str - 输入字符串
+ * @returns {string} - 转换后的半角字符串
+ */
+function toHalfWidth(str) {
+  if (!str) return str;
+  return str.replace(/[\uff00-\uffef]/g, function(ch) {
+    const code = ch.charCodeAt(0);
+    // 全角空格 -> 半角空格
+    if (code === 0x3000) return ' ';
+    // 全角字符（英文字母、数字、标点）-> 半角
+    if (code >= 0xff01 && code <= 0xff5e) {
+      return String.fromCharCode(code - 0xfee0);
+    }
+    return ch;
+  });
+}
+
+/**
+ * 查找Agent别名（支持大小写不敏感匹配）
+ * @param {string} mention - 用户输入的提及文本
+ * @returns {string|undefined} - 对应的agent ID或undefined
+ */
+function findAgentAlias(mention) {
+  if (!mention) return undefined;
+  
+  // 首先精确匹配
+  if (AGENT_ALIASES[mention]) {
+    return AGENT_ALIASES[mention];
+  }
+  
+  // 转换为半角后匹配（处理全角输入问题）
+  const halfWidthMention = toHalfWidth(mention);
+  if (AGENT_ALIASES[halfWidthMention]) {
+    return AGENT_ALIASES[halfWidthMention];
+  }
+  
+  // 不区分大小写匹配（仅对英文部分）
+  const lowerMention = halfWidthMention.toLowerCase();
+  for (const [alias, agentId] of Object.entries(AGENT_ALIASES)) {
+    if (alias.toLowerCase() === lowerMention) {
+      return agentId;
+    }
+  }
+  
+  return undefined;
+}
+
 // AI 信息（包含别名）
 export const AGENT_INFO = {
   qwen: { 
@@ -71,14 +121,17 @@ export function parseMentions(text) {
     return { mentions: [], isAll: false, cleanText: '' };
   }
   
+  // 首先将整个文本转换为半角（处理全角输入问题）
+  const normalizedText = toHalfWidth(text);
+  
   // 匹配 @xxx 格式（支持中文、英文、空格）
   const mentionRegex = /@([\u4e00-\u9fa5a-zA-Z\s]+?)(?=\s|$|@)/g;
   const matches = [];
   let match;
   
-  while ((match = mentionRegex.exec(text)) !== null) {
+  while ((match = mentionRegex.exec(normalizedText)) !== null) {
     const mention = match[1].trim();
-    const normalized = AGENT_ALIASES[mention];
+    const normalized = findAgentAlias(mention);
     if (normalized) {
       matches.push(normalized);
     }

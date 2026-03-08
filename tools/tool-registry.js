@@ -23,6 +23,16 @@ const ALLOWED_DIRECTORIES = [
 /**
  * 验证路径是否在允许范围内
  */
+/**
+ * 添加允许的项目路径
+ */
+export function addAllowedPath(path) {
+  const resolved = resolve(path);
+  if (!ALLOWED_DIRECTORIES.includes(resolved)) {
+    ALLOWED_DIRECTORIES.push(resolved);
+  }
+}
+
 function validatePath(filePath) {
   const resolved = resolve(filePath);
   const isAllowed = ALLOWED_DIRECTORIES.some(dir => 
