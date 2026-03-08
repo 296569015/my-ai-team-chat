@@ -40,6 +40,15 @@ export class AgentWithTools {
    - 纠正其他 AI 的错误
    - 提出新的角度和想法
    - 向其他 AI 提问以深入了解
+   - 当你需要获取更多信息或执行任务时，可以使用工具（如搜索、计算、文件操作等）
+   - 当你使用工具时，请清晰地说明你要使用哪个工具和为什么要使用它
+   - 当你得到工具的结果后，请解释结果的意义，并根据结果继续讨论或回答用户的问题
+   - 你可以多次使用工具，但请避免过度依赖工具，确保你的回复中也包含有价值的分析和见解
+   - 当你完成了用户的请求或讨论达成了结论，请明确告诉用户你做了什么和为什么这么做
+   - 你应该始终以用户的需求和团队的目标为导向，确保你的回复有助于推动讨论向前发展并最终满足用户的期望。
+   - 减少没必要的@提及，除非你需要直接回应某个 AI 的观点或问题
+   - 发@提及前问自己:需要对方采取行动？对方需要知道这个信息？会影响对方的工作？
+   - 回复前问"到我这里是否已经结束了？"如果没有结束，回复时要@提及对方并说明你需要对方的观点或信息来继续讨论
 
 【讨论风格】
 - 保持友好但有建设性的讨论态度
@@ -116,12 +125,32 @@ ${this.toolDescription}
   }
 
   /**
-   * 执行工具调用流程
+   * 检查是否被取消
+   * @param {AbortSignal} signal - 取消信号
+   * @returns {boolean} 是否已取消
+   */
+  checkCancelled(signal) {
+    if (signal?.aborted) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 执行工具调用流程（增强安全版本）
    * @param {Array} messages - 消息历史
    * @param {Function} chatCallback - 调用 AI 的回调函数
-   * @returns {Object} { content: 最终回复内容, events: 工具事件数组 }
+   * @param {Object} options - 选项，包含 signal 用于取消
+   * @returns {Object} { content: 最终回复内容, events: 工具事件数组, cancelled: 是否被取消 }
    */
-  async executeWithTools(messages, chatCallback) {
+  async executeWithTools(messages, chatCallback, options = {}) {
+    const { signal } = options;
+    
+    // 检查初始取消状态
+    if (this.checkCancelled(signal)) {
+      return { content: '', events: [], cancelled: true };
+    }
+    
     let allMessages = [
       { role: 'system', content: this.getSystemPrompt() },
       ...messages
@@ -132,8 +161,21 @@ ${this.toolDescription}
     const events = [];
     
     while (toolCallCount < maxToolCalls) {
+      // 检查取消信号
+      if (this.checkCancelled(signal)) {
+        console.log(`[${this.agentId}] 工具调用链被取消`);
+        return { content: '', events, cancelled: true };
+      }
+      
       // 调用 AI
       const response = await chatCallback(allMessages);
+      
+      // 再次检查（API 调用后可能已取消）
+      if (this.checkCancelled(signal)) {
+        console.log(`[${this.agentId}] API 调用后检测到取消`);
+        return { content: '', events, cancelled: true };
+      }
+      
       const content = response.content || response;
       
       // 解析工具调用
@@ -151,8 +193,18 @@ ${this.toolDescription}
           timestamp: Date.now()
         });
         
+        // 检查取消（工具执行前）
+        if (this.checkCancelled(signal)) {
+          return { content: '', events, cancelled: true };
+        }
+        
         // 执行工具
         const result = await executeTool(toolCall.tool, toolCall.params);
+        
+        // 检查取消（工具执行后）
+        if (this.checkCancelled(signal)) {
+          return { content: '', events, cancelled: true };
+        }
         
         // 记录工具结果事件
         events.push({
@@ -179,13 +231,14 @@ ${this.toolDescription}
       } else {
         // 没有工具调用，返回最终回复
         const textContent = this.extractTextContent(content);
-        return { content: textContent, events };
+        return { content: textContent, events, cancelled: false };
       }
     }
     
     return { 
       content: '', 
       events,
+      cancelled: false,
       error: '达到最大工具调用次数限制'
     };
   }

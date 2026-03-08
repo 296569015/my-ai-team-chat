@@ -599,6 +599,73 @@ body {
   transform: none;
 }
 
+/* 停止按钮 */
+.stop-indicator {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.stop-indicator.show {
+  display: flex;
+}
+
+.btn-stop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #fee2e2;
+  color: #ef4444;
+  border: 1px solid #fecaca;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  animation: fadeIn 0.3s ease;
+}
+
+.btn-stop:hover {
+  background: #fecaca;
+  transform: scale(1.05);
+}
+
+.btn-stop:active {
+  transform: scale(0.95);
+}
+
+.btn-stop i {
+  font-size: 10px;
+}
+
+/* 系统消息 */
+.system-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin: 12px 0;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease;
+}
+
+.system-message.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.system-message.info {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
 /* @选择弹框 */
 .mention-popup {
   position: absolute;

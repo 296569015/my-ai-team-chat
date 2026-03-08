@@ -6,6 +6,7 @@ const state = {
   sessions: [],
   agents: [],
   isWaiting: false,
+  isExecuting: false, // 新增：是否正在执行
   mentionState: {
     isOpen: false,
     selectedIndex: 0,
@@ -29,6 +30,10 @@ const elements = {
   memberList: document.getElementById('memberList'),
   currentSessionInfo: document.getElementById('currentSessionInfo'),
   typingIndicator: document.getElementById('typingIndicator'),
+  
+  // 停止按钮（新增）
+  stopIndicator: document.getElementById('stopIndicator'),
+  btnStop: document.getElementById('btnStop'),
   
   // 弹窗
   newChatModal: document.getElementById('newChatModal'),
@@ -121,6 +126,7 @@ function initSocket() {
     if (data.sessionId === state.currentSessionId) {
       hideTyping();
       appendStreamingMessage(data.agentId);
+      showStopButton(); // 显示停止按钮
     }
   });
   
@@ -141,19 +147,48 @@ function initSocket() {
   state.socket.on('typing', (data) => {
     if (data.sessionId === state.currentSessionId) {
       showTyping(data.agentId);
+      showStopButton(); // 显示停止按钮
     }
   });
   
+  // 等待用户输入（执行结束）
   state.socket.on('waiting_for_user', () => {
     state.isWaiting = false;
+    state.isExecuting = false;
     hideTyping();
+    hideStopButton(); // 隐藏停止按钮
     updateInputState();
+  });
+  
+  // 执行被停止
+  state.socket.on('execution_stopped', (data) => {
+    state.isWaiting = false;
+    state.isExecuting = false;
+    hideTyping();
+    hideStopButton();
+    updateInputState();
+    
+    // 显示系统消息
+    if (data.sessionId === state.currentSessionId) {
+      appendSystemMessage(data.message, 'info');
+    }
+  });
+  
+  // 系统消息
+  state.socket.on('system_message', (data) => {
+    if (data.sessionId === state.currentSessionId) {
+      appendSystemMessage(data.message, data.type || 'info');
+    }
   });
   
   // @通知事件已移除
   
   state.socket.on('error', (data) => {
     console.error('Socket error:', data);
+    // 如果是当前会话的错误，显示在界面上
+    if (data.sessionId === state.currentSessionId) {
+      appendSystemMessage('错误: ' + data.error, 'error');
+    }
     alert('错误: ' + data.error);
   });
 }
@@ -405,6 +440,31 @@ function appendMessage(data) {
   scrollToBottom();
 }
 
+// 新增：添加系统消息
+function appendSystemMessage(message, type = 'info') {
+  const msg = document.createElement('div');
+  msg.className = `system-message ${type}`;
+  
+  const icon = type === 'error' ? 'fa-exclamation-circle' : 
+               type === 'warning' ? 'fa-exclamation-triangle' : 
+               'fa-info-circle';
+  
+  msg.innerHTML = `
+    <i class="fas ${icon}"></i>
+    <span>${escapeHtml(message)}</span>
+  `;
+  
+  elements.messagesContainer.appendChild(msg);
+  scrollToBottom();
+  
+  // 3秒后自动消失（可选）
+  setTimeout(() => {
+    msg.style.opacity = '0';
+    msg.style.transition = 'opacity 0.5s';
+    setTimeout(() => msg.remove(), 500);
+  }, 5000);
+}
+
 // @通知已移除，不再显示
 
 function showTyping(agentId) {
@@ -418,11 +478,49 @@ function hideTyping() {
   elements.typingIndicator.classList.remove('show');
 }
 
+// 新增：显示/隐藏停止按钮
+function showStopButton() {
+  state.isExecuting = true;
+  elements.stopIndicator.style.display = 'flex';
+  elements.stopIndicator.classList.add('show');
+}
+
+function hideStopButton() {
+  state.isExecuting = false;
+  elements.stopIndicator.classList.remove('show');
+  setTimeout(() => {
+    if (!state.isExecuting) {
+      elements.stopIndicator.style.display = 'none';
+    }
+  }, 300);
+}
+
+// 新增：停止执行
+async function stopExecution() {
+  if (!state.currentSessionId || !state.isExecuting) return;
+  
+  // 通过 Socket 发送停止命令
+  state.socket.emit('stop_execution', {
+    sessionId: state.currentSessionId
+  });
+  
+  // 立即更新 UI（乐观更新）
+  state.isWaiting = false;
+  state.isExecuting = false;
+  hideTyping();
+  hideStopButton();
+  updateInputState();
+  
+  // 显示系统消息
+  appendSystemMessage('正在停止...', 'info');
+}
+
 function sendMessage() {
   const text = elements.messageInput.value.trim();
   if (!text || !state.currentSessionId || state.isWaiting) return;
   
   state.isWaiting = true;
+  state.isExecuting = true;
   updateInputState();
   
   state.socket.emit('user_message', {
@@ -655,6 +753,9 @@ async function deleteSession(sessionId, event) {
       // 如果删除的是当前会话，清空聊天区域
       if (sessionId === state.currentSessionId) {
         state.currentSessionId = null;
+        state.isWaiting = false;
+        state.isExecuting = false;
+        hideStopButton();
         elements.messagesContainer.innerHTML = `
           <div class="empty-state" id="emptyState">
             <div class="empty-icon"><i class="fas fa-comments"></i></div>
@@ -716,6 +817,9 @@ function bindEvents() {
   elements.btnSend.onclick = sendMessage;
   elements.messageInput.oninput = handleInput;
   elements.messageInput.onkeydown = handleKeydown;
+  
+  // 停止按钮（新增）
+  elements.btnStop.onclick = stopExecution;
   
   // 侧边栏切换
   elements.btnToggleSidebar.onclick = () => {

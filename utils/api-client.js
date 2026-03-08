@@ -9,17 +9,25 @@
  * @param {string} options.apiUrl - API 地址
  * @param {string} options.apiKey - API 密钥
  * @param {Object} options.body - 请求体
+ * @param {AbortSignal} options.signal - 取消信号（可选）
  * @returns {Promise<Object>} API 响应
  */
-export async function callAIApi({ apiUrl, apiKey, body }) {
-  const response = await fetch(apiUrl, {
+export async function callAIApi({ apiUrl, apiKey, body, signal }) {
+  const fetchOptions = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify(body)
-  });
+  };
+  
+  // 添加取消信号
+  if (signal) {
+    fetchOptions.signal = signal;
+  }
+  
+  const response = await fetch(apiUrl, fetchOptions);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -35,17 +43,25 @@ export async function callAIApi({ apiUrl, apiKey, body }) {
  * @param {string} options.apiUrl - API 地址
  * @param {string} options.apiKey - API 密钥
  * @param {Object} options.body - 请求体（需要设置 stream: true）
+ * @param {AbortSignal} options.signal - 取消信号（可选）
  * @returns {AsyncIterable<string>} 流式响应内容
  */
-export async function* streamAIApi({ apiUrl, apiKey, body }) {
-  const response = await fetch(apiUrl, {
+export async function* streamAIApi({ apiUrl, apiKey, body, signal }) {
+  const fetchOptions = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
     body: JSON.stringify({ ...body, stream: true })
-  });
+  };
+  
+  // 添加取消信号
+  if (signal) {
+    fetchOptions.signal = signal;
+  }
+  
+  const response = await fetch(apiUrl, fetchOptions);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -57,6 +73,12 @@ export async function* streamAIApi({ apiUrl, apiKey, body }) {
 
   try {
     while (true) {
+      // 检查取消信号
+      if (signal?.aborted) {
+        console.log('[API Client] 检测到取消信号，终止流式读取');
+        break;
+      }
+      
       const { done, value } = await reader.read();
       if (done) break;
       
@@ -64,6 +86,12 @@ export async function* streamAIApi({ apiUrl, apiKey, body }) {
       const lines = chunk.split('\n');
       
       for (const line of lines) {
+        // 检查取消信号（每行处理前）
+        if (signal?.aborted) {
+          console.log('[API Client] 处理中检测到取消信号');
+          break;
+        }
+        
         const trimmed = line.trim();
         if (trimmed.startsWith('data: ')) {
           const data = trimmed.slice(6);
@@ -75,7 +103,17 @@ export async function* streamAIApi({ apiUrl, apiKey, body }) {
           }
         }
       }
+      
+      // 如果已取消，退出外层循环
+      if (signal?.aborted) break;
     }
+  } catch (error) {
+    // 如果是取消导致的错误，静默处理
+    if (error.name === 'AbortError' || signal?.aborted) {
+      console.log('[API Client] 请求已被取消');
+      return;
+    }
+    throw error;
   } finally {
     reader.releaseLock();
   }

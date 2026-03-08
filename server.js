@@ -48,12 +48,34 @@ const AGENT_INFO = {
   deepseek: { id: 'deepseek', name: '小D', realName: 'DeepSeek', company: 'DeepSeek', icon: '🔍', color: '#3b82f6' }
 };
 
+// ============================================
+// 安全控制机制
+// ============================================
+
 // 会话存储（内存中，实际应用应该用数据库）
 const sessions = new Map();
 const userSessions = new Map(); // userId -> [sessionIds]
 
-// 最大每轮回复次数
+// 活跃的控制器（用于取消执行）
+const activeControllers = new Map(); // sessionId -> AbortController
+
+// 每轮每Agent最大回复次数
 const MAX_REPLY_PER_ROUND = 5;
+
+// 每轮全局最大调用次数（所有Agent合计）
+const MAX_TOTAL_CALLS_PER_ROUND = 15;
+
+// 单条消息最大工具调用次数
+const MAX_TOOL_CALLS_PER_MESSAGE = 10;
+
+// 清理会话控制器
+function cleanupController(sessionId) {
+  const controller = activeControllers.get(sessionId);
+  if (controller) {
+    controller.abort();
+    activeControllers.delete(sessionId);
+  }
+}
 
 // 生成会话名称
 function generateSessionName(members) {
@@ -81,6 +103,7 @@ function createSession(userId, name, members) {
     isProcessingQueue: false,
     currentRoundMessages: [],
     replyCountInRound: { qwen: 0, kimi: 0, deepseek: 0 },
+    totalCallCount: 0, // 全局调用计数器
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -156,21 +179,64 @@ ${session.members.filter(m => m !== agentId).map(m => `- @${AGENT_INFO[m].name} 
 }
 
 /**
- * 处理 AI 回复队列
+ * 安全地完成轮次并清理状态
+ */
+function safeFinishRound(session, sessionId) {
+  // 只有队列为空且没有正在处理的任务时才真正完成
+  if (session.mentionQueue.length > 0 || session.isProcessingQueue) {
+    return false; // 还不能完成
+  }
+  
+  finishRound(session);
+  
+  // 清理控制器
+  cleanupController(sessionId);
+  
+  // 通知前端更新
+  const socketId = Array.from(io.sockets.adapter.rooms.get(sessionId) || [])[0];
+  if (socketId) {
+    io.to(socketId).emit('waiting_for_user');
+  }
+  
+  return true;
+}
+
+/**
+ * 处理 AI 回复队列（增强安全版本）
  */
 async function processMentionQueue(sessionId, io) {
   const session = sessions.get(sessionId);
   if (!session) return;
   
-  if (session.isProcessingQueue || session.mentionQueue.length === 0) {
-    if (session.mentionQueue.length === 0) {
-      finishRound(session);
-      // 通知前端更新
-      const socketId = Array.from(io.sockets.adapter.rooms.get(sessionId) || [])[0];
-      if (socketId) {
-        io.to(socketId).emit('waiting_for_user');
-      }
-    }
+  // 检查是否应该停止
+  const controller = activeControllers.get(sessionId);
+  if (controller?.signal.aborted) {
+    console.log(`[${sessionId}] 执行已取消，停止队列处理`);
+    session.isProcessingQueue = false;
+    cleanupController(sessionId);
+    return;
+  }
+  
+  // 队列为空时尝试完成轮次
+  if (session.mentionQueue.length === 0) {
+    safeFinishRound(session, sessionId);
+    return;
+  }
+  
+  // 防止并发处理
+  if (session.isProcessingQueue) {
+    return;
+  }
+  
+  // 检查全局调用限制
+  if (session.totalCallCount >= MAX_TOTAL_CALLS_PER_ROUND) {
+    console.log(`[${sessionId}] 达到全局调用限制 (${MAX_TOTAL_CALLS_PER_ROUND})，强制结束本轮`);
+    io.to(sessionId).emit('system_message', {
+      type: 'limit_reached',
+      message: `已达到本轮最大调用次数限制 (${MAX_TOTAL_CALLS_PER_ROUND})`
+    });
+    session.mentionQueue = []; // 清空队列
+    safeFinishRound(session, sessionId);
     return;
   }
   
@@ -181,19 +247,22 @@ async function processMentionQueue(sessionId, io) {
   // 检查该AI是否在此会话中
   if (!session.members.includes(agentId)) {
     session.isProcessingQueue = false;
-    processMentionQueue(sessionId, io);
+    setTimeout(() => processMentionQueue(sessionId, io), 0);
     return;
   }
   
   const agent = agents[agentId];
   
+  // 检查单个Agent的调用限制
   if (!agent || session.replyCountInRound[agentId] >= MAX_REPLY_PER_ROUND) {
     session.isProcessingQueue = false;
-    processMentionQueue(sessionId, io);
+    setTimeout(() => processMentionQueue(sessionId, io), 0);
     return;
   }
   
+  // 增加计数器
   session.replyCountInRound[agentId]++;
+  session.totalCallCount++;
   
   io.to(sessionId).emit('typing', { agentId });
   
@@ -202,10 +271,19 @@ async function processMentionQueue(sessionId, io) {
     
     let messageContent = '';
     let mentionsInReply = [];
+    let wasCancelled = false;
     
     for await (const event of agent.invoke(prompt, { 
-      sessionId: session.agentSessions[agentId]
+      sessionId: session.agentSessions[agentId],
+      signal: controller?.signal // 传递取消信号
     })) {
+      // 检查是否被取消
+      if (controller?.signal.aborted) {
+        console.log(`[${sessionId}] Agent ${agentId} 执行被取消`);
+        wasCancelled = true;
+        break;
+      }
+      
       if (event.type === 'session_init') {
         session.agentSessions[agentId] = event.sessionId;
       }
@@ -246,6 +324,12 @@ async function processMentionQueue(sessionId, io) {
         });
       }
       
+      // 处理取消事件
+      if (event.type === 'cancelled') {
+        wasCancelled = true;
+        break;
+      }
+      
       if (event.type === 'tool_call') {
         io.to(sessionId).emit('message', {
           sessionId,
@@ -274,7 +358,8 @@ async function processMentionQueue(sessionId, io) {
       }
     }
     
-    if (messageContent) {
+    // 如果被取消，不保存消息也不处理@
+    if (!wasCancelled && messageContent) {
       session.currentRoundMessages.push({
         agentId,
         content: messageContent,
@@ -290,7 +375,6 @@ async function processMentionQueue(sessionId, io) {
           return true;
         });
         
-        // 直接加入队列，不再发送@通知
         if (newMentions.length > 0) {
           session.mentionQueue.push(...newMentions);
         }
@@ -305,7 +389,7 @@ async function processMentionQueue(sessionId, io) {
   session.isProcessingQueue = false;
   session.updatedAt = Date.now();
   
-  // 继续处理队列
+  // 继续处理队列（使用 setTimeout 避免阻塞）
   setTimeout(() => processMentionQueue(sessionId, io), 100);
 }
 
@@ -315,15 +399,20 @@ function finishRound(session) {
     session.currentRoundMessages = [];
   }
   
+  // 重置计数器
   session.replyCountInRound = { qwen: 0, kimi: 0, deepseek: 0 };
+  session.totalCallCount = 0;
   session.updatedAt = Date.now();
   
+  // 限制历史记录长度
   if (session.conversationHistory.length > 100) {
     session.conversationHistory = session.conversationHistory.slice(-100);
   }
 }
 
+// ============================================
 // API 路由
+// ============================================
 
 // 获取用户的所有会话
 app.get('/api/sessions', (req, res) => {
@@ -383,6 +472,9 @@ app.delete('/api/sessions/:sessionId', (req, res) => {
     return res.status(403).json({ error: '无权删除此会话' });
   }
   
+  // 先取消正在进行的执行
+  cleanupController(sessionId);
+  
   // 从用户的会话列表中移除
   const userSessionList = userSessions.get(userId);
   if (userSessionList) {
@@ -403,7 +495,105 @@ app.get('/api/agents', (req, res) => {
   res.json({ agents: Object.values(AGENT_INFO) });
 });
 
+// ============================================
+// 紧急停止 API（安全修复关键）
+// ============================================
+
+// 紧急停止会话中的所有执行
+app.post('/api/sessions/:sessionId/stop', (req, res) => {
+  const userId = req.headers['x-user-id'] || 'anonymous';
+  const sessionId = req.params.sessionId;
+  const session = sessions.get(sessionId);
+  
+  if (!session) {
+    return res.status(404).json({ error: '会话不存在' });
+  }
+  
+  // 验证权限
+  if (session.userId !== userId) {
+    return res.status(403).json({ error: '无权操作此会话' });
+  }
+  
+  // 执行紧急停止
+  const controller = activeControllers.get(sessionId);
+  if (controller) {
+    controller.abort();
+    activeControllers.delete(sessionId);
+    console.log(`[${sessionId}] 紧急停止已执行`);
+  }
+  
+  // 清空队列
+  session.mentionQueue = [];
+  session.isProcessingQueue = false;
+  
+  // 通知前端
+  io.to(sessionId).emit('execution_stopped', {
+    message: '执行已被用户终止',
+    timestamp: Date.now()
+  });
+  
+  // 解锁输入
+  io.to(sessionId).emit('waiting_for_user');
+  
+  res.json({ 
+    success: true, 
+    message: '执行已终止',
+    stoppedAt: Date.now()
+  });
+});
+
+// 管理员全局紧急停止（需要管理员密钥）
+app.post('/api/admin/emergency-stop', (req, res) => {
+  const { adminKey, sessionId } = req.body;
+  
+  // 简单的管理员验证（生产环境应使用更安全的验证）
+  if (adminKey !== process.env.ADMIN_KEY) {
+    return res.status(403).json({ error: '无效的管理员密钥' });
+  }
+  
+  if (sessionId) {
+    // 停止特定会话
+    const controller = activeControllers.get(sessionId);
+    if (controller) {
+      controller.abort();
+      activeControllers.delete(sessionId);
+    }
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.mentionQueue = [];
+      session.isProcessingQueue = false;
+    }
+    io.to(sessionId).emit('execution_stopped', {
+      message: '执行已被管理员终止',
+      timestamp: Date.now()
+    });
+  } else {
+    // 停止所有会话
+    for (const [sid, ctrl] of activeControllers) {
+      ctrl.abort();
+      const session = sessions.get(sid);
+      if (session) {
+        session.mentionQueue = [];
+        session.isProcessingQueue = false;
+      }
+      io.to(sid).emit('execution_stopped', {
+        message: '执行已被管理员全局终止',
+        timestamp: Date.now()
+      });
+    }
+    activeControllers.clear();
+  }
+  
+  res.json({ 
+    success: true, 
+    message: sessionId ? '指定会话已终止' : '所有会话已终止'
+  });
+});
+
+// ============================================
 // Socket.io
+// ============================================
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   const userId = socket.handshake.query.userId || 'anonymous';
@@ -453,13 +643,22 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // 清理之前的控制器（如果有）
+    cleanupController(sessionId);
+    
+    // 创建新的控制器
+    const controller = new AbortController();
+    activeControllers.set(sessionId, controller);
+    
     // 保存之前的轮次
     if (session.currentRoundMessages.length > 0) {
       session.conversationHistory.push(...session.currentRoundMessages);
       session.currentRoundMessages = [];
     }
     
+    // 重置计数器
     session.replyCountInRound = { qwen: 0, kimi: 0, deepseek: 0 };
+    session.totalCallCount = 0;
     
     // 保存用户消息
     session.conversationHistory.push({
@@ -481,8 +680,6 @@ io.on('connection', (socket) => {
     
     if (mentionResult.mentions.length > 0) {
       session.mentionQueue = mentionResult.mentions.filter(m => session.members.includes(m));
-      
-      // 不再发送@通知事件
     } else {
       // 没有@，按成员顺序回复
       session.mentionQueue = [...session.members];
@@ -496,6 +693,45 @@ io.on('connection', (socket) => {
     }
     
     session.updatedAt = Date.now();
+  });
+  
+  // 停止执行（前端紧急停止按钮）
+  socket.on('stop_execution', (data) => {
+    const { sessionId } = data;
+    const session = sessions.get(sessionId);
+    
+    if (!session) {
+      socket.emit('error', { error: '会话不存在' });
+      return;
+    }
+    
+    // 验证权限
+    if (session.userId !== userId) {
+      socket.emit('error', { error: '无权操作此会话' });
+      return;
+    }
+    
+    // 执行停止
+    const controller = activeControllers.get(sessionId);
+    if (controller) {
+      controller.abort();
+      activeControllers.delete(sessionId);
+      console.log(`[${sessionId}] 执行已通过 Socket 停止`);
+    }
+    
+    // 清空队列
+    session.mentionQueue = [];
+    session.isProcessingQueue = false;
+    
+    // 通知房间
+    io.to(sessionId).emit('execution_stopped', {
+      message: '执行已被用户终止',
+      timestamp: Date.now()
+    });
+    
+    io.to(sessionId).emit('waiting_for_user');
+    
+    socket.emit('stop_confirmed', { sessionId });
   });
   
   // 重命名会话
@@ -516,6 +752,9 @@ io.on('connection', (socket) => {
   // 断开连接
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
+    // 注意：用户断开时我们不自动取消执行
+    // 这是设计选择：让用户可以离线等待结果
+    // 如需断连自动取消，可在此遍历用户的所有会话并 cleanupController
   });
 });
 
@@ -523,4 +762,8 @@ const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
   console.log(`🚀 AI Team Chat Server running on http://localhost:${PORT}`);
+  console.log(`🔒 安全控制已启用:`);
+  console.log(`   - 每轮每Agent最大调用: ${MAX_REPLY_PER_ROUND}`);
+  console.log(`   - 每轮全局最大调用: ${MAX_TOTAL_CALLS_PER_ROUND}`);
+  console.log(`   - 单条消息工具调用限制: ${MAX_TOOL_CALLS_PER_MESSAGE}`);
 });

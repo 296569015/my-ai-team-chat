@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 /**
- * 千问 (Qwen) Agent - 支持流式响应
+ * 千问 (Qwen) Agent - 支持流式响应和取消
  * 使用阿里云 DashScope API
  */
 export class QwenAgent extends AgentWithTools {
@@ -17,11 +17,23 @@ export class QwenAgent extends AgentWithTools {
   }
 
   /**
-   * 调用千问 AI - 流式版本
+   * 调用千问 AI - 流式版本（支持取消）
    * @param {string} prompt - 完整提示（包含对话历史）
-   * @param {Object} options - 选项
+   * @param {Object} options - 选项，包含 sessionId 和 signal
    */
   async *invoke(prompt, options = {}) {
+    const { signal } = options;
+    
+    // 检查初始取消状态
+    if (this.checkCancelled(signal)) {
+      yield {
+        type: 'cancelled',
+        agentId: this.agentId,
+        timestamp: Date.now()
+      };
+      return;
+    }
+    
     if (!this.apiKey) {
       yield {
         type: 'error',
@@ -51,6 +63,12 @@ export class QwenAgent extends AgentWithTools {
         { role: 'user', content: prompt }
       ];
 
+      // 检查取消（API调用前）
+      if (this.checkCancelled(signal)) {
+        yield { type: 'cancelled', agentId: this.agentId, timestamp: Date.now() };
+        return;
+      }
+
       // 开始流式响应
       yield {
         type: 'message_start',
@@ -61,15 +79,27 @@ export class QwenAgent extends AgentWithTools {
       let fullContent = '';
       let buffer = '';
 
-      // 调用流式 API
+      // 调用流式 API（传递取消信号）
       for await (const chunk of streamAIApi({
         apiUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
         apiKey: this.apiKey,
         body: {
           model: this.model,
           messages: messages
-        }
+        },
+        signal // 传递取消信号
       })) {
+        // 检查取消（每次 chunk 后）
+        if (this.checkCancelled(signal)) {
+          console.log(`[${this.agentId}] 流式响应被取消`);
+          yield {
+            type: 'cancelled',
+            agentId: this.agentId,
+            timestamp: Date.now()
+          };
+          return;
+        }
+        
         const delta = chunk.choices?.[0]?.delta?.content;
         if (delta) {
           fullContent += delta;
@@ -87,6 +117,12 @@ export class QwenAgent extends AgentWithTools {
             buffer = '';
           }
         }
+      }
+
+      // 检查取消（流结束后）
+      if (this.checkCancelled(signal)) {
+        yield { type: 'cancelled', agentId: this.agentId, timestamp: Date.now() };
+        return;
       }
 
       // 发送剩余内容
@@ -135,6 +171,17 @@ export class QwenAgent extends AgentWithTools {
       };
 
     } catch (error) {
+      // 检查是否是取消导致的错误
+      if (error.name === 'AbortError' || this.checkCancelled(signal)) {
+        console.log(`[${this.agentId}] 请求被中止`);
+        yield {
+          type: 'cancelled',
+          agentId: this.agentId,
+          timestamp: Date.now()
+        };
+        return;
+      }
+      
       const isAuthError = error.message.includes('401') || error.message.includes('Authentication');
       const errorMsg = isAuthError 
         ? `【千问 API 密钥错误】请检查 .env 文件中的 QWEN_API_KEY 是否正确。错误: ${error.message}`
