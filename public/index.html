@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Team Chat</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- 左侧栏：会话列表 -->
+    <aside class="sidebar-left">
+      <div class="sidebar-header">
+        <div class="logo">
+          <i class="fas fa-robot"></i>
+          <span>AI Team Chat</span>
+        </div>
+        <button class="btn-new-chat" id="btnNewChat">
+          <i class="fas fa-plus"></i>
+          <span>新对话</span>
+        </button>
+      </div>
+      
+      <div class="search-box">
+        <i class="fas fa-search"></i>
+        <input type="text" placeholder="搜索会话..." id="searchSessions">
+      </div>
+      
+      <div class="session-list" id="sessionList">
+        <!-- 会话列表动态插入 -->
+      </div>
+      
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <div class="user-avatar">
+            <i class="fas fa-user"></i>
+          </div>
+          <span class="user-name">老板</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 中间栏：聊天区域 -->
+    <main class="chat-area">
+      <!-- 聊天头部 -->
+      <header class="chat-header">
+        <div class="chat-header-left">
+          <button class="btn-toggle-sidebar" id="btnToggleSidebar">
+            <i class="fas fa-bars"></i>
+          </button>
+          <div class="chat-title">
+            <h2 id="chatTitle">选择一个会话</h2>
+            <span class="chat-subtitle" id="chatSubtitle">点击左侧会话开始聊天</span>
+          </div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="btn-icon" title="下载聊天记录" id="btnDownload">
+            <i class="fas fa-download"></i>
+          </button>
+          <button class="btn-icon" title="更多选项" id="btnMore">
+            <i class="fas fa-ellipsis-h"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- 成员头像栏 -->
+      <div class="members-bar" id="membersBar">
+        <!-- 成员头像动态插入 -->
+      </div>
+
+      <!-- 消息区域 -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">
+            <i class="fas fa-comments"></i>
+          </div>
+          <h3>开始一个新的对话</h3>
+          <p>点击"新对话"创建群聊，或选择左侧的历史会话</p>
+        </div>
+      </div>
+
+      <!-- 输入区域 -->
+      <div class="input-area" id="inputArea" style="display: none;">
+        <div class="typing-indicator" id="typingIndicator">
+          <span class="typing-text"></span>
+          <span class="dots">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+        <div class="input-wrapper">
+          <div class="input-box-wrapper">
+            <textarea 
+              id="messageInput" 
+              placeholder="输入消息，使用 @ 提及成员..."
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <!-- @选择弹框 -->
+            <div class="mention-popup" id="mentionPopup">
+              <div class="mention-popup-header">选择要@的成员</div>
+              <div class="mention-popup-list" id="mentionPopupList"></div>
+            </div>
+          </div>
+          <button class="btn-send" id="btnSend">
+            <i class="fas fa-paper-plane"></i>
+          </button>
+        </div>
+      </div>
+    </main>
+
+    <!-- 右侧栏：信息和状态 -->
+    <aside class="sidebar-right">
+      <div class="sidebar-section">
+        <h3 class="section-title">当前会话</h3>
+        <div class="current-session-info" id="currentSessionInfo">
+          <div class="empty-text">未选择会话</div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 class="section-title">在线成员</h3>
+        <div class="member-list" id="memberList">
+          <!-- 成员列表动态插入 -->
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 class="section-title">快捷操作</h3>
+        <div class="quick-actions">
+          <button class="action-btn" id="btnClearChat">
+            <i class="fas fa-trash-alt"></i>
+            <span>清空聊天记录</span>
+          </button>
+          <button class="action-btn" id="btnRename">
+            <i class="fas fa-edit"></i>
+            <span>重命名会话</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 新对话弹窗 -->
+  <div class="modal-overlay" id="newChatModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>新建对话</h3>
+        <button class="btn-close" id="btnCloseModal">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>选择AI成员</label>
+          <div class="agent-select-list" id="agentSelectList">
+            <!-- AI选项动态插入 -->
+          </div>
+        </div>
+        <div class="form-group">
+          <label>会话名称（可选）</label>
+          <input type="text" id="sessionNameInput" placeholder="留空将自动生成名称">
+          <span class="form-hint">单人对话将自动使用该成员的名字</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancel">取消</button>
+        <button class="btn btn-primary" id="btnCreate" disabled>创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 重命名弹窗 -->
+  <div class="modal-overlay" id="renameModal">
+    <div class="modal modal-small">
+      <div class="modal-header">
+        <h3>重命名会话</h3>
+        <button class="btn-close" id="btnCloseRenameModal">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>新名称</label>
+          <input type="text" id="renameInput" placeholder="输入新名称">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelRename">取消</button>
+        <button class="btn btn-primary" id="btnConfirmRename">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
